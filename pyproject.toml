@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "git-archaeology"
+version = "0.1.0"
+description = "Code decay archaeology CLI — find corruption inflection points in Git history"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "git-archaeology" }]
+dependencies = [
+  "typer>=0.12",
+  "rich>=13.0",
+  "pyyaml>=6.0",
+  "jinja2>=3.1",
+  "lizard>=1.17",
+  "ruptures>=1.1",
+  "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "pytest-cov>=4.1"]
+
+[project.scripts]
+git-arch = "git_arch.cli.app:_entry"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["git_arch*"]
+
+[tool.setuptools.package-data]
+git_arch = ["report/templates/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

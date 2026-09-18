@@ -1,0 +1,17 @@
+# git-archaeology
+.git-arch/
+.fixtures/
+*.egg-info/
+.eggs/
+dist/
+build/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+archaeology-report.md
+archaeology-report.html
+archaeology-report.json
