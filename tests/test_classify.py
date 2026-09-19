@@ -124,14 +124,27 @@ def test_class_view_splits_multi_and_single():
         global_series=[series("Alpha", [2, 10]), series("Beta", [1, 8]), series("Quiet", [3, 3])],
         events=[],
         hotspots=[],
-        actions=[],
+        actions=["优先处理 high 拐点"],
         appendix={},
     )
     view = build_class_view(report)
     assert view["multi_total"] == 1
     assert view["multi"][0]["class_count"] == 2
     assert view["multi"][0]["author"] == "Ann"
+    assert view["multi"][0]["total_delta"] > 0
     names = {c["name"] for c in view["multi"][0]["classes"]}
     assert names == {"Alpha", "Beta"}
     assert view["single_total"] == 2
     assert view["single"][0]["name"] == "Alpha"
+    assert "jump_index" in view["single"][0]["chart"]
+    assert view["single"][0]["chart"]["points"]
+    assert view["single"][0]["authors"] == ["Ann"]
+
+    from git_arch.report.classify import build_summary
+
+    summary = build_summary(report, [], view)
+    assert summary["multi_total"] == 1
+    assert summary["single_total"] == 2
+    assert summary["conclusions"]
+    assert summary["actions"] == ["优先处理 high 拐点"]
+

@@ -210,10 +210,22 @@ def _chart_for_area(report: ArchaeologyReport, area: str, files: list[str]) -> d
     if len(points) > 36:
         step = len(points) / 36
         points = [points[int(i * step)] for i in range(36)]
+    values = [round(p.value, 2) for p in points]
+    jump_index = 0
+    best_gap = -1.0
+    for i in range(1, len(values)):
+        gap = abs(values[i] - values[i - 1])
+        if gap > best_gap:
+            best_gap = gap
+            jump_index = i
     return {
         "file": best.entity_id,
         "labels": [p.timestamp.strftime("%m-%d") for p in points],
-        "values": [round(p.value, 2) for p in points],
+        "values": values,
+        "jump_index": jump_index,
+        "jump_label": points[jump_index].timestamp.strftime("%Y-%m-%d") if points else "",
+        "jump_sha": short_sha(points[jump_index].commit_sha) if points else "",
+        "jump_author": "",
     }
 
 
@@ -273,12 +285,33 @@ def build_class_view(report: ArchaeologyReport, *, multi_limit: int = 20, single
             jumps_by_commit[pts[i].commit_sha].append(jump)
         if not jumps:
             continue
-        chart_pts = pts
-        if len(chart_pts) > 36:
-            step = len(chart_pts) / 36
-            chart_pts = [chart_pts[int(i * step)] for i in range(36)]
-        values = [round(p.value, 2) for p in chart_pts]
+        # Keep full timeline for story charts; mark jumps by commit sha.
+        jump_shas = {j["commit_sha"] for j in jumps}
+        story_points = []
+        for p in pts:
+            is_jump = p.commit_sha in jump_shas
+            story_points.append(
+                {
+                    "date": p.timestamp.strftime("%Y-%m-%d"),
+                    "label": p.timestamp.strftime("%m-%d"),
+                    "value": round(p.value, 2),
+                    "author": (p.extras or {}).get("author") or "—",
+                    "sha": short_sha(p.commit_sha),
+                    "commit_sha": p.commit_sha,
+                    "message": summarize_message((p.extras or {}).get("message") or "", 48),
+                    "is_jump": is_jump,
+                }
+            )
+        values = [p["value"] for p in story_points]
         biggest = max(jumps, key=lambda j: abs(j["after_raw"] - j["before_raw"]))
+        jump_index = next(
+            (i for i, p in enumerate(story_points) if p["commit_sha"] == biggest["commit_sha"]),
+            len(story_points) - 1,
+        )
+        authors = []
+        for p in story_points:
+            if p["is_jump"] and p["author"] not in authors:
+                authors.append(p["author"])
         singles.append(
             {
                 "name": name,
@@ -291,11 +324,17 @@ def build_class_view(report: ArchaeologyReport, *, multi_limit: int = 20, single
                 "delta": round(pts[-1].value - pts[0].value, 1),
                 "methods": (pts[-1].extras or {}).get("methods") or 0,
                 "spark": _ascii_spark(values),
+                "authors": authors,
                 "chart": {
-                    "labels": [p.timestamp.strftime("%m-%d") for p in chart_pts],
+                    "labels": [p["label"] for p in story_points],
                     "values": values,
+                    "points": story_points,
+                    "jump_index": jump_index,
+                    "jump_label": biggest["date"],
+                    "jump_author": biggest["author"],
+                    "jump_sha": biggest["sha"],
                 },
-                "jumps": jumps[:6],
+                "jumps": jumps,
                 "author": biggest["author"],
                 "jump_date": biggest["date"],
                 "jump_sha": biggest["sha"],
@@ -317,6 +356,7 @@ def build_class_view(report: ArchaeologyReport, *, multi_limit: int = 20, single
         for c in classes:
             if c["area"] not in areas:
                 areas.append(c["area"])
+        total_delta = sum(abs(c["after_raw"] - c["before_raw"]) for c in classes)
         multi.append(
             {
                 "date": head["date"],
@@ -325,14 +365,86 @@ def build_class_view(report: ArchaeologyReport, *, multi_limit: int = 20, single
                 "message": head["message"],
                 "areas": areas,
                 "class_count": len(classes),
+                "total_delta": round(total_delta, 1),
                 "classes": classes[:12],
             }
         )
-    multi.sort(key=lambda m: (-m["class_count"], m["date"]))
+    multi.sort(key=lambda m: (-m["class_count"], -m["total_delta"], m["date"]))
 
     return {
         "multi_total": len(multi),
         "single_total": len(singles),
         "multi": multi[:multi_limit],
         "single": singles[:single_limit],
+    }
+
+
+def build_summary(report: ArchaeologyReport, areas: list[dict], classes: dict) -> dict:
+    """Compact first-screen summary for the HTML report."""
+    high = sum(1 for e in report.events if e.severity == "high")
+    medium = sum(1 for e in report.events if e.severity == "medium")
+    low = sum(1 for e in report.events if e.severity == "low")
+    top_areas = [
+        {
+            "name": a["name"],
+            "severity": a["severity"],
+            "change_count": a["change_count"],
+            "file_count": a["file_count"],
+            "primary_kind": a["primary_kind"],
+        }
+        for a in areas[:3]
+    ]
+    top_classes = [
+        {
+            "name": s["name"],
+            "area": s["area"],
+            "start": s["start"],
+            "end": s["end"],
+            "delta": s["delta"],
+            "author": s["author"],
+            "jump_date": s["jump_date"],
+            "jump_sha": s["jump_sha"],
+        }
+        for s in classes.get("single", [])[:3]
+    ]
+    top_multi = classes.get("multi", [])[:1]
+    conclusions: list[str] = []
+    if top_areas:
+        a = top_areas[0]
+        conclusions.append(
+            f"腐化最集中在 `{a['name']}`（{a['severity']}，{a['change_count']} 处变化 / {a['file_count']} 文件）。"
+        )
+    if top_classes:
+        c = top_classes[0]
+        conclusions.append(
+            f"单类幅度最大是 `{c['name']}`：{c['start']} → {c['end']}，"
+            f"最大跳变 {c['jump_date']} `{c['jump_sha']}`（{c['author']}）。"
+        )
+    if top_multi:
+        m = top_multi[0]
+        conclusions.append(
+            f"最大多类共变是 {m['date']} `{m['sha']}`：一次动了 {m['class_count']} 个类"
+            f"（{m['author']}）。"
+        )
+    if high:
+        conclusions.append(f"共有 {high} 个 high 严重度拐点，建议优先处理。")
+    authors = sorted(
+        {
+            e.author_name
+            for e in report.events
+            if e.author_name
+        }
+    )
+    return {
+        "high": high,
+        "medium": medium,
+        "low": low,
+        "area_count": len(areas),
+        "multi_total": classes.get("multi_total", 0),
+        "single_total": classes.get("single_total", 0),
+        "top_areas": top_areas,
+        "top_classes": top_classes,
+        "conclusions": conclusions[:4],
+        "authors": authors,
+        "actions": report.actions[:4],
     }
